@@ -20,7 +20,6 @@ def gen_sample(freq, sr, bits, cycle, sample):
     sample_size_in_bytes = bits // 8
     stride = freq * len(cycle) / sr
 
-
     if bits == 16:
         fmt = "<h"
     else:
@@ -32,6 +31,28 @@ def gen_sample(freq, sr, bits, cycle, sample):
         s = cycle[int(pos) % len(cycle)]
         struct.pack_into(fmt, sample, i * sample_size_in_bytes, s)
         pos = pos + stride
+
+class CycleIterator:
+    def __init__(self, freq, sr, bits, cycle):
+        self.cycle = cycle
+        self.pos = 0
+        self.sample_size_in_bytes = bits // 8
+        self.stride = freq * len(cycle) / sr
+        if bits == 16:
+            self.fmt = "<h"
+        else:
+            self.fmt = "<l"
+        
+    def make_cycle_iterator(self, n_samples):
+        for _ in range(0, n_samples):
+            s = self.cycle[int(self.pos)]
+            for i in range(0, self.sample_size_in_bytes):
+                yield (s >> (i * 8)) & 0xFF
+            
+            self.pos = self.pos + self.stride
+
+            if self.pos > len(self.cycle):
+                self.pos = self.pos - len(self.cycle)
 
 midi_table = gen_midi_table()
 
@@ -70,17 +91,20 @@ uart = machine.UART(1,31250)
 
 # Basic MIDI handling commands
 def doMidiNoteOn(note,vel):
+    global note_iterator
     pin.value(1)
     print("Note On \t", note, "\t", vel)
-    global samples
-    global samples_idx
-    samples_idx = (samples_idx + 1) % len(some_samples)
-    samples = some_samples[samples_idx]
+    freq = midi_table[note]
+    print("freq\t", freq)
 
+    note_iterator = CycleIterator(freq, 22050, 16, cycle)
 
 def doMidiNoteOff(note,vel):
+    global note_iterator
     pin.value(0)
     print("Note Off\t", note, "\t", vel)
+
+    note_iterator = None
 
 # Implement a simple MIDI decoder.
 #
@@ -276,16 +300,28 @@ audio_out = I2S(
 
 cycle = gen_cycle(16, 2000)
 
-samples440 = bytearray(BUFFER_LENGTH_IN_BYTES * (SAMPLE_SIZE_IN_BITS) // 8)
-samples379 = bytearray(BUFFER_LENGTH_IN_BYTES * (SAMPLE_SIZE_IN_BITS) // 8)
+# samples440 = bytearray(BUFFER_LENGTH_IN_BYTES * (SAMPLE_SIZE_IN_BITS) // 8)
+# samples379 = bytearray(BUFFER_LENGTH_IN_BYTES * (SAMPLE_SIZE_IN_BITS) // 8)
 
-gen_sample(440, 22050, 16, cycle, samples440)
-gen_sample(379, 22050, 16, cycle, samples379)
+# gen_sample(440, 22050, 16, cycle, samples440)
+# gen_sample(379, 22050, 16, cycle, samples379)
+
+ci440 = CycleIterator(440, 22050, 16, cycle)
+samples440 = bytearray(ci440.make_cycle_iterator(2000))
+
+ci379 = CycleIterator(379, 22050, 16, cycle)
+samples379 = bytearray(ci379.make_cycle_iterator(2000))
+
+samples_silence = bytearray(4000)
+
+note_iterator = None
 
 some_samples = [samples440, samples379]
 samples_idx = 0
 
 samples = some_samples[samples_idx]
+
+next_sample = samples_silence
 
 # continuously write tone sample buffer to an I2S DAC
 # print("==========  START PLAYBACK ==========")
@@ -301,14 +337,26 @@ samples = some_samples[samples_idx]
 # print("Done")
 
 def write_samples(arg):
-    audio_out.write(samples)
+    # audio_out.write(samples)
+    global next_sample
+    if next_sample:
+        audio_out.write(next_sample)
+    else:
+        audio_out.write(samples_silence)
+    next_sample = None
 
 def main():
+    global next_sample
     try:
         audio_out.irq(write_samples)
-        audio_out.write(samples)
+        audio_out.write(samples_silence)
     
         while True:
+            if next_sample == None:
+                if note_iterator:
+                    next_sample = bytearray(note_iterator.make_cycle_iterator(2000))
+                else:
+                    next_sample = samples_silence
             if (uart.any()):  
                 v = uart.read(1)[0]
                 print("got", v, "0x" + hex(v))

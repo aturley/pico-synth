@@ -11,3 +11,7 @@ Play the correct note when pressing a key.
 [Pico <-> MIDI connection](https://diyelectromusic.wordpress.com/2021/02/15/midi-in-for-3-3v-microcontrollers/)
 
 [Pico <-> MIDI code](https://raw.githubusercontent.com/diyelectromusic/sdemp/master/src/SDEMP/Micropython/SimpleMidiMonitor.py)
+
+## Status
+
+It plays the notes, but it takes so long to write new samples to the buffer that there are lots of very long breaks in the audio output. Time to switch to C.
